@@ -7,6 +7,7 @@ from tensorflow.python.training.adam import AdamOptimizer
 from firefly.utils.logging_utils import get_logger
 import numpy as np
 import tensorflow as tf
+from firefly.utils.time_utils import time_it
 
 
 def build_graph(network_input, input_shape, output_shape, batch_size):
@@ -59,33 +60,56 @@ def add_optimizer(loss):
 
 class InputProvider:
     
-    BASE_DIR = '/home/sanjeev/Downloads/datasets/cifar-10-batches-py/'
+    BASE_DIR = '/home/sanjeev/Downloads/datasets/cifar-10-batches-py/'            
     
+    class InputIterator:
+        
+        def __init__(self, input_provider, batch_size, input_size):
+            self.input_provider = input_provider
+            self.offset = 0
+            self.batch_size = batch_size
+            self.input_size = input_size
+        
+        def __iter__(self):
+            return self
+        
+        @time_it
+        def next(self):
+            if self.offset * self.batch_size < self.input_size:
+                images, groundtruths = self.input_provider.get_next_batch(self.offset, batch_size)
+                self.offset += 1
+                return images, groundtruths
+            else:
+                StopIteration()
+        
+        
     def __init__(self):
         filenames = [ os.path.join(self.BASE_DIR, 'data_batch_{}'.format(i)) for i in xrange(1, 5)]
         self.batches = []
-        
-        class InputBatch:pass
+        self.images = []
+        self.groundtruths = []
         
         for filename in filenames:
             data_dict = self.unpickle(filename)
             data = data_dict['data']
             labels = data_dict['labels']
-            input_batch = InputBatch()
-            input_batch.images = []
-            input_batch.groundtruths = labels
             for i in xrange(10000):
                 image = np.reshape(data[i], [ 3, 32, 32])
 #                 viewer = ImageViewer(image.transpose((2, 1, 0)))
 #                 viewer.show()                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            
                 image = ndarray.astype(image, np.float32)
                 image = image.transpose((2, 1, 0))
-                input_batch.images.append(image)
-                
-            self.batches.append(input_batch)
+                self.images.append(image)
+            self.groundtruths += labels
         
-    def get_next_batch(self, i):
-        return self.batches[i]
+    def get_next_batch(self, offset, batch_size):
+        start_index = offset * batch_size
+        images = self.images[start_index:start_index + batch_size]
+        groundtruths = self.groundtruths[start_index:start_index + batch_size]
+        return images, groundtruths
+    
+    def get_iter(self, batch_size):
+        return InputProvider.InputIterator(self, batch_size, len(self.images))
 
     def unpickle(self, filename):
         fo = open(filename, 'rb')
@@ -97,13 +121,13 @@ if __name__ == '__main__':
     input_provider = InputProvider()
     img_h = 32
     img_w = 32
-    LOG_DIR = '/home/sanjeev/logs/' 
-    LEARNED_WEIGHTS_FILENAME = 'resources/learned_weights.ckpt'
+    LOG_DIR = 'logs/' 
+    LEARNED_WEIGHTS_FILENAME = 'checkpoints/learned_weights.ckpt'
      
     logger = get_logger()    
      
-    epoch = 500
-    batch_size = 10000
+    epoch = 1000
+    batch_size = 100
      
     rgbd_input_batch = tf.placeholder(tf.float32, [batch_size, img_h, img_w, 3], name='rgbd_input')
     groundtruth_batch = tf.placeholder(tf.int32, [batch_size], name='groundtruth')
@@ -119,16 +143,16 @@ if __name__ == '__main__':
     saver = tf.train.Saver()
      
     for step in xrange(epoch):
-        logger.info('Executing step:{}'.format(step))
-        for i in xrange(5):
-            logger.info('Executing epoc:{}, batch:{}'.format(step, i))
-            images_batch = input_provider.get_next_batch(i)
-            result = session.run([apply_gradient_op, loss, merged_summary], feed_dict={rgbd_input_batch:images_batch.images,
-                                        groundtruth_batch:images_batch.groundtruths})
+        batch_iter = input_provider.get_iter(batch_size)
+        for  i, batch in enumerate(batch_iter):
+            images, groundtruths = batch
+            logger.info('epoc:{}, batch:{}'.format(step, i))
+            result = session.run([apply_gradient_op, loss, merged_summary], feed_dict={rgbd_input_batch:images,
+                                        groundtruth_batch:groundtruths})
             loss_value = result[1]
-            logger.info('epoc:{}, Batch:{}, Loss :{}'.format(step, i, loss_value))
+            logger.info('epoc:{}, batch:{},loss :{}'.format(step, i, loss_value))
         summary_writer.add_summary(result[2], step)
-        if step % 10 == 0:
+        if step % 50 == 0:
             logger.info('Saving weights.')
             saver.save(session, LEARNED_WEIGHTS_FILENAME)
              
